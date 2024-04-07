@@ -1,0 +1,50 @@
+ 
+cd /home/vnx_user/Deformable-DETR
+conda activate deformable_detr
+GPUS_PER_NODE=4 ./tools/run_dist_launch.sh 4 ./configs/r50_deformable_detr.sh
+
+
+# GPUS_PER_NODE=1 ./tools/run_dist_launch.sh 1 ./configs/r50_deformable_detr.sh
+
+GPUS_PER_NODE=4 ./tools/run_dist_launch.sh 4 ./configs/r50_deformable_detr_single_scale.sh --batch_size 16 --resume /home/vnx_user/Deformable-DETR/exps/r50_deformable_detr_single_scale/checkpoint0019.pth 
+
+GPUS_PER_NODE=3 ./tools/run_dist_launch.sh 3 ./configs/r50_deformable_detr_single_scale.sh --batch_size 16 --resume /home/vnx_user/Deformable-DETR/exps/r50_deformable_detr_single_scale/checkpoint0019.pth 
+
+GPUS_PER_NODE=3 ./tools/run_dist_launch.sh 3 ./configs/r50_deformable_detr_single_scale_plus_cross_attn_with_clip.sh --batch_size 16
+
+GPUS_PER_NODE=1 ./tools/run_dist_launch.sh 4 ./configs/r50_deformable_detr_single_scale_plus_cross_attn_with_clip.sh --batch_size 16 --resume /home/vnx_user/Deformable-DETR/exps/r50_deformable_detr_single_scale_plus_cross_attn_with_clip/checkpoint0004.pth
+
+./configs/r50_deformable_detr_single_scale.sh --resume /home/vnx_user/Deformable-DETR/exps/r50_deformable_detr_single_scale/checkpoint0009.pth  --eval
+
+./configs/r50_deformable_detr_single_scale_plus_cross_attn_with_clip.sh --resume /home/vnx_user/Deformable-DETR/exps/old/checkpoint0014.pth --eval
+
+./configs/r50_deformable_detr_single_scale_plus_cross_attn_with_clip.sh --resume /home/vnx_user/Deformable-DETR/exps/r50_deformable_detr_single_scale_plus_cross_attn_with_clip/checkpoint0009.pth --eval
+
+
+python -u test.py --num_feature_levels 1 --output_dir exps/test --insert_cross_attn --device cuda:3
+
+
+killall -u vnx_user
+
+pkill -9 python
+
+python -u main.py --num_feature_levels 1 --output_dir exps/r50_deformable_detr_single_scale_plus_cross_attn_with_clip --insert_cross_attn --batch_size 16 --device cuda:2
+
+python -u main.py --num_feature_levels 1 --output_dir exps/r50_deformable_detr_single_scale_plus_cross_attn_with_clip --insert_cross_attn --batch_size 4 --device cuda:2 ?
+
+
+
+GPUS_PER_NODE=3 ./tools/run_dist_launch.sh 3 ./configs/r50_deformable_detr_single_scale_plus_cross_attn_with_clip.sh --batch_size 12 --gpu_list "1,2,3"
+
+
+
+GPUS_PER_NODE=3 CUDA_VISIBLE_DEVICES=1,2,3 ./tools/run_dist_launch.sh 3 ./configs/r50_deformable_detr_single_scale_plus_cross_attn_with_clip.sh --batch_size 12
+
+GPUS_PER_NODE=1 CUDA_VISIBLE_DEVICES=3 ./tools/run_dist_launch.sh 3 ./configs/r50_deformable_detr_single_scale_plus_cross_attn_with_clip.sh --batch_size 12
+
+nohup python -u main.py --num_feature_levels 1 --output_dir exps/r50_deformable_detr_single_scale_plus_cross_attn_with_clip --insert_cross_attn --batch_size 12 --device cuda:3 >> train_logs.log
+
+1. 增加梯度叠加layer
+2. 每过几个iteration 增加
+3. loss权重，调整
+4. 每经过几个iteration 保存下diffusion生成的图片

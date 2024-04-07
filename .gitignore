@@ -1,0 +1,8 @@
+recon_img/
+exps/
+__pycache__/
+diffuser_reconstruct/sd-coco-model
+diffuser_reconstruct/__pycache__
+conda_env_deformable_detr
+train_logs
+data
