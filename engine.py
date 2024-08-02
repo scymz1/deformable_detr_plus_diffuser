@@ -39,11 +39,12 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
     # for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
     for _, i in enumerate(metric_logger.log_every(range(len(data_loader)), print_freq, header)):
-
-        outputs = model(samples)
+        # save_recon_tensor = True if (i + 1) % 600 == 0 else False
+        save_recon_tensor = False
+        additional_inputs = {'target': targets, 'epoch': epoch, "save_recon_tensor": save_recon_tensor}
+        outputs = model(samples, **additional_inputs)
         # 60
-        save_recon_tensor = True if (i + 1) % 1 == 0 else False
-        loss_dict = criterion(outputs, targets, save_recon_tensor = save_recon_tensor, epoch = epoch)
+        loss_dict = criterion(outputs, targets, save_recon_tensor = False, epoch = epoch)
         weight_dict = criterion.weight_dict
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
 
@@ -107,7 +108,8 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        outputs = model(samples)
+        additional_inputs = {'target': targets, 'epoch': -1, "save_recon_tensor": False}
+        outputs = model(samples, **additional_inputs)
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
 

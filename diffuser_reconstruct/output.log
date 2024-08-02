@@ -1,0 +1,30 @@
+
+Lmod is automatically replacing "intel/2020.0.166" with "gcc/12.2.0".
+
+2024-06-21 16:49:42.560999: E external/local_xla/xla/stream_executor/cuda/cuda_dnn.cc:9261] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+2024-06-21 16:49:42.561697: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:607] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+2024-06-21 16:49:42.663731: E external/local_xla/xla/stream_executor/cuda/cuda_blas.cc:1515] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+2024-06-21 16:49:42.866585: I tensorflow/core/platform/cpu_feature_guard.cc:182] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+2024-06-21 16:49:45.395416: W tensorflow/compiler/tf2tensorrt/utils/py_utils.cc:38] TF-TRT Warning: Could not find TensorRT
+Fetching 19 files:   0%|          | 0/19 [00:00<?, ?it/s]/home/minghao.zhou/miniconda3/lib/python3.11/site-packages/huggingface_hub/file_download.py:1006: UserWarning: Not enough free disk space to download the file. The expected file size is: 1389.38 MB. The target location /home/minghao.zhou/.cache/huggingface/hub only has 629.15 MB free disk space.
+  warnings.warn(
+/home/minghao.zhou/miniconda3/lib/python3.11/site-packages/huggingface_hub/file_download.py:1006: UserWarning: Not enough free disk space to download the file. The expected file size is: 1389.38 MB. The target location /home/minghao.zhou/.cache/huggingface/hub/models--stabilityai--stable-diffusion-xl-base-1.0/blobs only has 629.15 MB free disk space.
+  warnings.warn(
+Fetching 19 files:  11%|█         | 2/19 [00:00<00:01, 16.11it/s]/home/minghao.zhou/miniconda3/lib/python3.11/site-packages/huggingface_hub/file_download.py:1006: UserWarning: Not enough free disk space to download the file. The expected file size is: 5135.15 MB. The target location /home/minghao.zhou/.cache/huggingface/hub only has 629.15 MB free disk space.
+  warnings.warn(
+/home/minghao.zhou/miniconda3/lib/python3.11/site-packages/huggingface_hub/file_download.py:1006: UserWarning: Not enough free disk space to download the file. The expected file size is: 5135.15 MB. The target location /home/minghao.zhou/.cache/huggingface/hub/models--stabilityai--stable-diffusion-xl-base-1.0/blobs only has 629.15 MB free disk space.
+  warnings.warn(
+Fetching 19 files:  21%|██        | 4/19 [00:01<00:06,  2.32it/s]Fetching 19 files:  32%|███▏      | 6/19 [00:06<00:18,  1.46s/it]Fetching 19 files:  84%|████████▍ | 16/19 [00:22<00:04,  1.57s/it]Fetching 19 files: 100%|██████████| 19/19 [00:22<00:00,  1.20s/it]
+Loading pipeline components...:   0%|          | 0/7 [00:00<?, ?it/s]Loading pipeline components...:  14%|█▍        | 1/7 [00:00<00:02,  2.56it/s]Loading pipeline components...:  43%|████▎     | 3/7 [00:00<00:00,  6.33it/s]Loading pipeline components...:  57%|█████▋    | 4/7 [00:01<00:00,  3.28it/s]Loading pipeline components...:  86%|████████▌ | 6/7 [00:02<00:00,  2.39it/s]Loading pipeline components...: 100%|██████████| 7/7 [00:02<00:00,  3.12it/s]
+<class 'diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl.StableDiffusionXLPipeline'>
+Traceback (most recent call last):
+  File "/blue/yonghui.wu/minghao.zhou/my/deformable_detr_plus_diffuser/diffuser_reconstruct/diffusion_xl.py", line 10, in <module>
+    print(inspect.getfile(pipeline_text2image))
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/minghao.zhou/miniconda3/lib/python3.11/site-packages/torch/package/package_importer.py", line 699, in _patched_getfile
+    return _orig_getfile(object)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/minghao.zhou/miniconda3/lib/python3.11/inspect.py", line 920, in getfile
+    raise TypeError('module, class, method, function, traceback, frame, or '
+TypeError: module, class, method, function, traceback, frame, or code object was expected, got StableDiffusionXLPipeline

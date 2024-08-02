@@ -6,3 +6,4 @@ diffuser_reconstruct/__pycache__
 conda_env_deformable_detr
 train_logs
 data
+huggingface_cache

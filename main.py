@@ -25,6 +25,14 @@ from datasets import build_dataset, get_coco_api_from_dataset
 from engine import evaluate, train_one_epoch
 from models import build_model
 
+torch.backends.cuda.matmul.allow_tf32 = True
+
+import os
+
+os.environ["HF_HOME"] = "/blue/yonghui.wu/minghao.zhou/my/deformable_detr_plus_diffuser/huggingface_cache"
+os.environ["TORCH_HOME"] = "/blue/yonghui.wu/minghao.zhou/my/deformable_detr_plus_diffuser/huggingface_cache"
+
+
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Deformable DETR Detector', add_help=False)
@@ -151,8 +159,9 @@ def main(args):
     random.seed(seed)
 
     model, criterion, postprocessors = build_model(args)
-    criterion.pipeline = criterion.pipeline.to(device)
+    # criterion.pipeline = criterion.pipeline.to(device)
     model.to(device)
+    model.pipeline = model.pipeline.to(device)
     model_without_ddp = model
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print('number of params:', n_parameters)
@@ -280,7 +289,7 @@ def main(args):
     print("Start training")
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
-        if epoch >= 8 and 'object_queries' not in criterion.losses:
+        if epoch >= -1 and 'object_queries' not in criterion.losses:
             criterion.losses.append('object_queries')
         if args.distributed:
             sampler_train.set_epoch(epoch)

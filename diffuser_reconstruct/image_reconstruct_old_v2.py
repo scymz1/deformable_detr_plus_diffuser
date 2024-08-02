@@ -1,5 +1,5 @@
 import torch
-from diffusers import AutoPipelineForImage2Image, AutoPipelineForText2Image
+from diffusers import AutoPipelineForImage2Image
 from diffuser_reconstruct.sable_diffution_pipeline import add_function_get_tensor_outputs, freezeModels
 # from sable_diffution_pipeline import add_function_get_tensor_outputs, freezeModels
 from diffusers.utils import load_image, make_image_grid
@@ -35,7 +35,7 @@ def add_noise_to_image_by_step(image, num_steps=50, current_step=1, noise_schedu
 
 
 def image_reconstruct(pipeline, image, object_queries, image_id, save_img=False, device="cuda", 
-                      save_recon_tensor=False, epoch=None, num_inference_steps=2):
+                      save_recon_tensor=False, epoch=None, num_inference_steps=1):
     
     # pipeline.enable_model_cpu_offload()
 
@@ -61,12 +61,9 @@ def image_reconstruct(pipeline, image, object_queries, image_id, save_img=False,
 
     prompt = "an image of zebra" # "cls an image of zebra els" + 71 " " [77] string
     # -> [77, 768] -> [1, 768]
-    prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = pipeline.encode_prompt(prompt, device=device, do_classifier_free_guidance=True, num_images_per_prompt=1)
-    # prompt_embeds[:, 4] = object_queries
-
-    output = pipeline.get_tensor_outputs(prompt_embeds=prompt_embeds,negative_prompt_embeds=negative_prompt_embeds, image=noisy_image, num_inference_steps=num_inference_steps,
-        pooled_prompt_embeds=pooled_prompt_embeds, negative_pooled_prompt_embeds=negative_pooled_prompt_embeds)
-    # output = pipeline.get_tensor_outputs(prompt=prompt, image=noisy_image)
+    prompt_embeds, negative_prompt_embeds = pipeline.encode_prompt(prompt, device=device, do_classifier_free_guidance=True, num_images_per_prompt=1)
+    prompt_embeds[:, 4] = object_queries
+    output = pipeline.get_tensor_outputs(prompt_embeds=prompt_embeds,negative_prompt_embeds=negative_prompt_embeds, image=noisy_image, num_inference_steps=num_inference_steps)
     if save_recon_tensor:
         save_image(output, f"./recon_img/{epoch}_{image_id}_recon.png")
         image.save(f"./recon_img/{epoch}_{image_id}_origin.png")
@@ -77,18 +74,16 @@ def image_reconstruct(pipeline, image, object_queries, image_id, save_img=False,
 if __name__ == "__main__":
     # object_queries = torch.load("object_queries_test.pt")
     # object_queries = torch.squeeze(object_queries, 1)
-    pipeline_text2image = AutoPipelineForText2Image.from_pretrained(
-    "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True
+    pipeline = AutoPipelineForImage2Image.from_pretrained(
+        "./diffuser_reconstruct/sd-coco-model", torch_dtype=torch.float32, use_safetensors=True
     )
-
-    pipeline = AutoPipelineForImage2Image.from_pipe(pipeline_text2image)
     add_function_get_tensor_outputs(pipeline)
     freezeModels(pipeline)
-    object_queries = torch.rand((1, 2048))
+    object_queries = torch.rand((1, 768))
     # print(object_queries)
     device = "cuda:2"
-    # image_reconstruct(pipeline, "./test_mask.png", object_queries, 11, save_img=True, device=device)
-    pipelineClass = type(pipeline)
-    print(inspect.getfile(pipelineClass))
+    image_reconstruct(pipeline, "./test_mask.png", object_queries, 11, save_img=True, device=device)
+    # pipelineClass = type(pipeline)
+    # print(inspect.getfile(pipelineClass))
 
     # line 375326

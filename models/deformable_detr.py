@@ -15,6 +15,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 import math
+import os
 
 from util import box_ops
 from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
@@ -31,11 +32,10 @@ from PIL import Image, ImageDraw
 import random
 from diffuser_reconstruct.image_reconstruct import image_reconstruct
 from diffuser_reconstruct.sable_diffution_pipeline import add_function_get_tensor_outputs, freezeModels
-from diffusers import AutoPipelineForImage2Image
+from diffusers import AutoPipelineForImage2Image, AutoPipelineForText2Image
 
 from contextlib import contextmanager
 import sys
-import os
 
 @contextmanager
 def suppress_stdout():
@@ -53,7 +53,7 @@ class DeformableDETR(nn.Module):
     """ This is the Deformable DETR module that performs object detection """
     def __init__(self, backbone, transformer, num_classes, num_queries, num_feature_levels,
                  aux_loss=True, with_box_refine=False, two_stage=False,
-                 d_model=256, clip_dim=768):
+                 d_model=256, clip_dim=2048):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -132,8 +132,21 @@ class DeformableDETR(nn.Module):
             self.transformer.decoder.class_embed = self.class_embed
             for box_embed in self.bbox_embed:
                 nn.init.constant_(box_embed.layers[-1].bias.data[2:], 0.0)
+        
+        # self.pipeline = AutoPipelineForImage2Image.from_pretrained(
+        #     "./diffuser_reconstruct/sd-coco-model", torch_dtype=torch.float16, use_safetensors=True
+        # )
 
-    def forward(self, samples: NestedTensor):
+        pipeline_text2image = AutoPipelineForText2Image.from_pretrained(
+            "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float16, variant="fp16", use_safetensors=True
+        )
+        self.pipeline = AutoPipelineForImage2Image.from_pipe(pipeline_text2image)
+
+        self.pipeline.safety_checker = lambda images, clip_input: (images, False)
+        add_function_get_tensor_outputs(self.pipeline)
+        freezeModels(self.pipeline)
+
+    def forward(self, samples: NestedTensor, **kwargs):
         """ The forward expects a NestedTensor, which consists of:
                - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
                - samples.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels
@@ -212,7 +225,13 @@ class DeformableDETR(nn.Module):
         if self.two_stage:
             enc_outputs_coord = enc_outputs_coord_unact.sigmoid()
             out['enc_outputs'] = {'pred_logits': enc_outputs_class, 'pred_boxes': enc_outputs_coord}
-        return out
+
+        return self.loss_object_queries(out, kwargs['target'], save_recon_tensor=kwargs["save_recon_tensor"], epoch=kwargs['epoch'])
+        # if self.training:
+        #     target = kwargs['target']
+        #     return self.loss_object_queries(out, target, save_recon_tensor=kwargs["save_recon_tensor"], epoch=kwargs['epoch'])
+
+        # return out
 
     @torch.jit.unused
     def _set_aux_loss(self, outputs_class, outputs_coord):
@@ -221,6 +240,72 @@ class DeformableDETR(nn.Module):
         # as a dict having both a Tensor and a list.
         return [{'pred_logits': a, 'pred_boxes': b}
                 for a, b in zip(outputs_class[:-1], outputs_coord[:-1])]
+    
+    def get_image_file_path(self, image_id):
+        file = "data/coco/train2017/" + str(image_id).zfill(12) + ".jpg"
+        return file
+
+    def loss_object_queries(self, outputs, targets, **kwargs):
+        # minghao: add object queries
+        losses = {}
+        # print(outputs['pred_boxes'].shape)
+        # print(targets[0]['image_id'])
+        out_logits, out_bbox, object_queries = outputs['pred_logits'], outputs['pred_boxes'], outputs['object_query']
+        device = out_logits.device
+        prob = out_logits.sigmoid()
+        topk_values, topk_indexes = torch.topk(prob.view(out_logits.shape[0], -1), 100, dim=1)
+        # [1, 100], [1, 100]
+        scores = topk_values
+        topk_boxes = topk_indexes // out_logits.shape[2] # [1, 100] / 300 -> [1, 100]
+        labels = topk_indexes % out_logits.shape[2]
+        boxes = box_ops.box_cxcywh_to_xyxy(out_bbox) # [1, 300, 4]
+        boxes = torch.gather(boxes, 1, topk_boxes.unsqueeze(-1).repeat(1,1,4)) # [1, 100, 4]
+        # print(topk_boxes.unsqueeze(-1).repeat(1,1,4).shape) [1, 100, 4]
+        object_queries = torch.gather(object_queries, 1, topk_boxes.unsqueeze(-1).repeat(1, 1, object_queries.shape[-1])) # [1, 100, 4]
+
+        loss_list = []
+        print("calculate object queries loss")
+        for i in range(0, out_logits.shape[0]):
+            keep = scores[i] > 0.05
+            # print(keep, boxes.shape, labels.shape, object_queries.shape)
+            boxes_i = boxes[i, keep]
+            labels_i = labels[i, keep]
+            object_queries_i = object_queries[i, keep]
+            if boxes_i.shape[0] > 0:
+                image_id = targets[i]['image_id'].item()
+                img_path = self.get_image_file_path(image_id)
+                try:
+                    img = Image.open(img_path)
+                except:
+                    continue
+                im_h,im_w = img.size
+                target_sizes = torch.tensor([[im_w,im_h]])
+                target_sizes =target_sizes.to(device)
+                img_h, img_w = target_sizes.unbind(1)
+                scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
+                boxes_i = boxes_i * scale_fct[:, None, :]
+                random_select = random.randint(0, boxes_i.shape[1] - 1)
+                xmin, ymin, xmax, ymax = boxes_i[0].tolist()[random_select]
+                cropped_img = img.crop((xmin, ymin, xmax, ymax))
+                cropped_img = resize_img(cropped_img)
+                object_queries_i = object_queries_i[random_select].unsqueeze(0)
+                try:
+                    # with suppress_stdout(): 
+                    reconstruct_tensor = image_reconstruct(self.pipeline, cropped_img, object_queries_i, image_id, save_img=False, save_recon_tensor=kwargs["save_recon_tensor"], epoch=kwargs["epoch"],  device=device, num_inference_steps=5)
+                    kwargs["save_recon_tensor"] == False
+                except Exception as error:
+                    traceback.print_exc()
+                    print("error occurs:", error)
+                    # print(img.size, cropped_img.size, targets[i]['image_id'])
+                    continue
+                label_tensor = self.pipeline.image_processor.preprocess(cropped_img).to(device)
+                loss = F.mse_loss(reconstruct_tensor, label_tensor)
+                loss_list.append(loss)
+        if len(loss_list) > 0:
+            losses['object_queries'] = sum(loss_list) / len(loss_list)
+            # print(losses, loss_list)
+        outputs['object_queries_loss'] = losses
+        return outputs
 
 
 class SetCriterion(nn.Module):
@@ -244,12 +329,12 @@ class SetCriterion(nn.Module):
         self.weight_dict = weight_dict
         self.losses = losses
         self.focal_alpha = focal_alpha
-        self.pipeline = AutoPipelineForImage2Image.from_pretrained(
-            "./diffuser_reconstruct/sd-coco-model", torch_dtype=torch.float16, use_safetensors=True
-        )
-        self.pipeline.safety_checker = lambda images, clip_input: (images, False)
-        add_function_get_tensor_outputs(self.pipeline)
-        freezeModels(self.pipeline)
+        # self.pipeline = AutoPipelineForImage2Image.from_pretrained(
+        #     "./diffuser_reconstruct/sd-coco-model", torch_dtype=torch.float16, use_safetensors=True
+        # )
+        # self.pipeline.safety_checker = lambda images, clip_input: (images, False)
+        # add_function_get_tensor_outputs(self.pipeline)
+        # freezeModels(self.pipeline)
 
     def loss_labels(self, outputs, targets, indices, num_boxes, log=True, **kwargs):
         """Classification loss (NLL)
@@ -292,72 +377,72 @@ class SetCriterion(nn.Module):
         return losses
 
     def loss_object_queries(self, outputs, targets, indices, num_boxes, **kwargs):
-        # minghao: add object queries
-        losses = {}
-        # print(outputs['pred_boxes'].shape)
-        # print(targets[0]['image_id'])
-        out_logits, out_bbox, object_queries = outputs['pred_logits'], outputs['pred_boxes'], outputs['object_query']
-        device = out_logits.device
-        prob = out_logits.sigmoid()
-        topk_values, topk_indexes = torch.topk(prob.view(out_logits.shape[0], -1), 100, dim=1)
-        # [1, 100], [1, 100]
-        scores = topk_values
-        topk_boxes = topk_indexes // out_logits.shape[2] # [1, 100] / 300 -> [1, 100]
-        labels = topk_indexes % out_logits.shape[2]
-        boxes = box_ops.box_cxcywh_to_xyxy(out_bbox) # [1, 300, 4]
-        boxes = torch.gather(boxes, 1, topk_boxes.unsqueeze(-1).repeat(1,1,4)) # [1, 100, 4]
-        # print(topk_boxes.unsqueeze(-1).repeat(1,1,4).shape) [1, 100, 4]
-        object_queries = torch.gather(object_queries, 1, topk_boxes.unsqueeze(-1).repeat(1, 1, object_queries.shape[-1])) # [1, 100, 4]
+        # # minghao: add object queries
+        # losses = {}
+        # # print(outputs['pred_boxes'].shape)
+        # # print(targets[0]['image_id'])
+        # out_logits, out_bbox, object_queries = outputs['pred_logits'], outputs['pred_boxes'], outputs['object_query']
+        # device = out_logits.device
+        # prob = out_logits.sigmoid()
+        # topk_values, topk_indexes = torch.topk(prob.view(out_logits.shape[0], -1), 100, dim=1)
+        # # [1, 100], [1, 100]
+        # scores = topk_values
+        # topk_boxes = topk_indexes // out_logits.shape[2] # [1, 100] / 300 -> [1, 100]
+        # labels = topk_indexes % out_logits.shape[2]
+        # boxes = box_ops.box_cxcywh_to_xyxy(out_bbox) # [1, 300, 4]
+        # boxes = torch.gather(boxes, 1, topk_boxes.unsqueeze(-1).repeat(1,1,4)) # [1, 100, 4]
+        # # print(topk_boxes.unsqueeze(-1).repeat(1,1,4).shape) [1, 100, 4]
+        # object_queries = torch.gather(object_queries, 1, topk_boxes.unsqueeze(-1).repeat(1, 1, object_queries.shape[-1])) # [1, 100, 4]
 
-        loss_list = []
-        print("calculate object queries loss")
-        for i in range(0, out_logits.shape[0]):
-            keep = scores[i] > 0.05
-            # print(keep, boxes.shape, labels.shape, object_queries.shape)
-            boxes_i = boxes[i, keep]
-            labels_i = labels[i, keep]
-            object_queries_i = object_queries[i, keep]
-            if boxes_i.shape[0] > 0:
-                image_id = targets[i]['image_id'].item()
-                img_path = self.get_image_file_path(image_id)
-                try:
-                    img = Image.open(img_path)
-                except:
-                    continue
-                im_h,im_w = img.size
-                target_sizes = torch.tensor([[im_w,im_h]])
-                target_sizes =target_sizes.to(device)
-                img_h, img_w = target_sizes.unbind(1)
-                scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
-                boxes_i = boxes_i * scale_fct[:, None, :]
-                random_select = random.randint(0, boxes_i.shape[1] - 1)
-                xmin, ymin, xmax, ymax = boxes_i[0].tolist()[random_select]
-                cropped_img = img.crop((xmin, ymin, xmax, ymax))
-                print(cropped_img.size)
-                cropped_img = resize_img(cropped_img)
-                object_queries_i = object_queries_i[random_select].unsqueeze(0)
-                try:
-                    # with suppress_stdout(): 
-                    print("save_recon_tensor", kwargs["save_recon_tensor"])
-                    reconstruct_tensor = image_reconstruct(self.pipeline, cropped_img, object_queries_i, image_id, save_img=False,
-                                                           save_recon_tensor=kwargs["save_recon_tensor"], epoch=kwargs["epoch"], device=device)
-                    kwargs["save_recon_tensor"] == False
-                except Exception as error:
-                    traceback.print_exc()
-                    print("error occurs:", error)
-                    # print(img.size, cropped_img.size, targets[i]['image_id'])
-                    continue
-                label_tensor = self.pipeline.image_processor.preprocess(cropped_img).to(device)
-                loss = F.mse_loss(reconstruct_tensor, label_tensor)
-                loss_list.append(loss)
-        if len(loss_list) > 0:
-            losses['object_queries'] = sum(loss_list) / len(loss_list)
-            # print(losses, loss_list)
-        return losses
+        # loss_list = []
+        # print("calculate object queries loss")
+        # for i in range(0, out_logits.shape[0]):
+        #     keep = scores[i] > 0.05
+        #     # print(keep, boxes.shape, labels.shape, object_queries.shape)
+        #     boxes_i = boxes[i, keep]
+        #     labels_i = labels[i, keep]
+        #     object_queries_i = object_queries[i, keep]
+        #     if boxes_i.shape[0] > 0:
+        #         image_id = targets[i]['image_id'].item()
+        #         img_path = self.get_image_file_path(image_id)
+        #         try:
+        #             img = Image.open(img_path)
+        #         except:
+        #             continue
+        #         im_h,im_w = img.size
+        #         target_sizes = torch.tensor([[im_w,im_h]])
+        #         target_sizes =target_sizes.to(device)
+        #         img_h, img_w = target_sizes.unbind(1)
+        #         scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
+        #         boxes_i = boxes_i * scale_fct[:, None, :]
+        #         random_select = random.randint(0, boxes_i.shape[1] - 1)
+        #         xmin, ymin, xmax, ymax = boxes_i[0].tolist()[random_select]
+        #         cropped_img = img.crop((xmin, ymin, xmax, ymax))
+        #         print(cropped_img.size)
+        #         cropped_img = resize_img(cropped_img)
+        #         object_queries_i = object_queries_i[random_select].unsqueeze(0)
+        #         try:
+        #             # with suppress_stdout(): 
+        #             print("save_recon_tensor", kwargs["save_recon_tensor"])
+        #             reconstruct_tensor = image_reconstruct(self.pipeline, cropped_img, object_queries_i, image_id, save_img=False,
+        #                                                    save_recon_tensor=kwargs["save_recon_tensor"], epoch=kwargs["epoch"], device=device)
+        #             kwargs["save_recon_tensor"] == False
+        #         except Exception as error:
+        #             traceback.print_exc()
+        #             print("error occurs:", error)
+        #             # print(img.size, cropped_img.size, targets[i]['image_id'])
+        #             continue
+        #         label_tensor = self.pipeline.image_processor.preprocess(cropped_img).to(device)
+        #         loss = F.mse_loss(reconstruct_tensor, label_tensor)
+        #         loss_list.append(loss)
+        # if len(loss_list) > 0:
+        #     losses['object_queries'] = sum(loss_list) / len(loss_list)
+        #     # print(losses, loss_list)
+        return outputs['object_queries_loss']
 
-    def get_image_file_path(self, image_id):
-        file = "data/coco/train2017/" + str(image_id).zfill(12) + ".jpg"
-        return file
+    # def get_image_file_path(self, image_id):
+    #     file = "data/coco/train2017/" + str(image_id).zfill(12) + ".jpg"
+    #     return file
 
 
     def loss_boxes(self, outputs, targets, indices, num_boxes, **kwargs):
@@ -598,7 +683,7 @@ def build(args):
     return model, criterion, postprocessors
 
 
-def resize_img(image, max_dimension=60):
+def resize_img(image, max_dimension=120):
         # Get the original width and height
     width, height = image.size
 
